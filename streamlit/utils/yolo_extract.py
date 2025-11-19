@@ -19,10 +19,23 @@ OUTPUT_EXCEL = "extract_all_raw.xlsx"
 SAVE_DEBUG_CROPS = True
 DEBUG_DIR = "debug_crops"
 
+# ===================== DOWNLOAD MODEL IF NEEDED =====================
+
+import gdown
+
+FILE_ID = "1FsZiNePLm-bmMT5WwYun29I6jkiLnhAU"
+
+if not os.path.exists(MODEL_PATH):
+    os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+    download_url = f"https://drive.google.com/uc?id={FILE_ID}"
+    print(f"Downloading model from {download_url}")
+    gdown.download(download_url, MODEL_PATH, quiet=False)
+
 # ===================== LOAD YOLO & OCR =====================
 
 model = YOLO(MODEL_PATH)
 reader = easyocr.Reader(["sv", "en"], gpu=False)
+
 
 # ===================== FIELD DEFINITIONS =====================
 
@@ -229,3 +242,4 @@ def process_folder():
     df = pd.DataFrame(rows, columns=["filename"] + ORDER)
     df.to_excel(OUTPUT_EXCEL, index=False)
     print(f"\n🎉 Extraction complete! Raw data saved as: {OUTPUT_EXCEL}")
+
