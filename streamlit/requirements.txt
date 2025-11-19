@@ -7,3 +7,5 @@ pytesseract
 pdf2image
 ultralytics
 openpyxl
+gdown
+
