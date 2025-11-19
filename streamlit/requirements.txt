@@ -1,0 +1,9 @@
+numpy
+pandas
+opencv-python-headless
+pillow
+easyocr
+pytesseract
+pdf2image
+ultralytics
+openpyxl
