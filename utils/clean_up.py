@@ -1,5 +1,6 @@
 import re
 import pandas as pd
+from rapidfuzz import fuzz
 
 # ================================================================
 #  LABEL PREFIXES TO REMOVE (Swedish + OCR variants)
@@ -113,6 +114,24 @@ def clean_granskningsstatus_syfte(val):
 
     return ""
 
+def remove_teknikområde_prefix(text):
+    candidates = [
+        "TEKNIKOMRÅDE", "TEKNIKOMRADE", "TEKNIKOVRÅDE",
+        "TEKNIKOMRÄDE", "TEKNIKDMRADE", "TEKNIK OMRÅDE",
+        "TEKNIKO MRÅDE", "TEKNIKO VRÅDE"
+    ]
+    
+    words = text.split()
+    cleaned = []
+    for w in words:
+        is_label = False
+        for c in candidates:
+            if fuzz.partial_ratio(w.upper(), c.upper()) > 80:
+                is_label = True
+                break
+        if not is_label:
+            cleaned.append(w)
+    return " ".join(cleaned)
 
 def clean_konstrukt_and_andrings(val):
     if pd.isna(val):
@@ -409,6 +428,43 @@ def clean_granskad_av(val):
                 return rest
     return t
 
+def clean_anlaggningstyp(val):
+    """
+    Cleans ANLÄGGNINGSTYP field so final output is ONLY:
+    - 'TUNNEL'
+    - 'BYGGNAD'
+    - '' (blank)
+    """
+
+    if not isinstance(val, str):
+        return ""
+
+    t = val.upper().strip()
+
+    # Normalize Swedish letters
+    t = (t.replace("AE", "Ä")
+         .replace("OE", "Ö")
+         .replace("AA", "Å"))
+
+    # Remove OCR prefix variants (ANLÄGGNINGSTYP, ANLAGGNINGSTYP, ANLAEGNINGSTYP, etc.)
+    t = re.sub(r"^ANL[ÄA]G+N+I?N?G?STYP[\s:.-]*", "", t, flags=re.IGNORECASE).strip()
+
+    # Allowed final categories:
+    VALID = ["TUNNEL", "BYGGNAD"]
+
+    # Exact match first
+    for v in VALID:
+        if v in t:
+            return v
+
+    # Fuzzy match for OCR mistakes
+    import difflib
+    for v in VALID:
+        if difflib.SequenceMatcher(None, t, v).ratio() > 0.6:
+            return v
+
+    # Otherwise empty
+    return ""
 
 
 # ================================================================
@@ -448,6 +504,9 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         if col == "ANDR":
             df[col] = df[col].fillna("").astype(str)
+            continue
+    # Skip ANLÄGGNINGSTYP (we clean it separately)
+        if col in ["ANLAGGNINGSTYP", "ANLÄGGNINGSTYP"]:
             continue
 
         if col != "filename":
@@ -516,6 +575,17 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     if "Beskrivning_1" in df.columns:
         df["Beskrivning_1"] = df["Beskrivning_1"].apply(clean_beskrivning_1)
+    # ============================
+    # Clean ANLÄGGNINGSTYP column
+    # ============================
+    if "ANLAGGNINGSTYP" in df.columns:
+        df["ANLAGGNINGSTYP"] = df["ANLAGGNINGSTYP"].apply(clean_anlaggningstyp)
+
+    if "ANLÄGGNINGSTYP" in df.columns:
+        df["ANLÄGGNINGSTYP"] = df["ANLÄGGNINGSTYP"].apply(clean_anlaggningstyp)
+    if col == "TEKNIKOMRÅDE":
+        value = remove_teknikområde_prefix(value)
+
 
     df = enforce_rules(df)
     return df

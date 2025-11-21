@@ -10,3 +10,4 @@ openpyxl
 gdown
 PyMuPDF
 xlsxwriter
+rapidfuzz
