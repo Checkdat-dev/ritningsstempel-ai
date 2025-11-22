@@ -8,3 +8,4 @@ ultralytics
 openpyxl
 xlsxwriter
 rapidfuzz
+PyMuPDF==1.24.11
