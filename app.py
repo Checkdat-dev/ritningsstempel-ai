@@ -3,7 +3,6 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-import cv2
 import os
 import traceback
 
@@ -123,7 +122,10 @@ if pdf_list:
                 stamp_img = pdf_to_stamp(pdf_bytes)
 
                 st.subheader("📌 Cropped Stamp")
-                stamp_rgb = cv2.cvtColor(stamp_img, cv2.COLOR_BGR2RGB)
+                # Convert BGR → RGB without cv2
+                from PIL import Image
+                stamp_rgb = Image.fromarray(stamp_img[:, :, ::-1])
+                
                 st.image(stamp_rgb, use_container_width=True)
 
                 # STEP 2 — YOLO + OCR + Extract
