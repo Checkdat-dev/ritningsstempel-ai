@@ -3,7 +3,6 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-import cv2
 import os
 import traceback
 
