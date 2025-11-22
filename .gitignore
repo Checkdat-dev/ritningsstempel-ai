@@ -1,0 +1,23 @@
+# Ignore Python cache
+__pycache__/
+
+# Ignore debug crops completely
+debug_crops/
+
+# Ignore VS Code settings
+.vscode/
+
+# Ignore environment folders
+.venv/
+env/
+venv/
+
+# Ignore compiled Python files
+*.pyc
+*.pyo
+
+# Ignore Streamlit logs
+logs/
+
+# Ignore Excel temporary files
+~$*.xlsx
