@@ -1,6 +1,6 @@
 numpy
 pandas
-opencv-python-headless
+opencv-python-headless==4.9.0.80
 pillow
 easyocr
 pdf2image
