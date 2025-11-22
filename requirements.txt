@@ -7,7 +7,6 @@ pytesseract
 pdf2image
 ultralytics
 openpyxl
-gdown
 PyMuPDF
 xlsxwriter
 rapidfuzz
