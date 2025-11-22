@@ -6,6 +6,5 @@ easyocr
 pdf2image
 ultralytics
 openpyxl
-PyMuPDF
 xlsxwriter
 rapidfuzz
