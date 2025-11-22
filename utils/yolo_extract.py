@@ -63,6 +63,39 @@ def segment_lines(crop):
     parts.append(crop[last:ys[-1]])
 
     return parts
+def clean_andr_field(tokens):
+    raw = "".join(t.strip() for t in tokens if t.strip() != "")
+    underscore_chars = set(["_", "-", "—", "–", "|", "l", "I", ".", "‒"])
+
+    if raw == "" or all(ch in underscore_chars for ch in raw):
+        return "_"
+
+    m = re.match(r"^[_\-\—\–\.]+(\d+)$", raw)
+    if m:
+        return f"_.{m.group(1)}"
+
+    if raw in underscore_chars:
+        return "_"
+
+    m = re.match(r"^[_\-\—\–\.]+([A-ZÅÄÖ])$", raw)
+    if m:
+        return f"_{m.group(1)}"
+
+    m = re.match(r"^([A-ZÅÄÖ])\.?(\d+)$", raw)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}"
+
+    m = re.match(r"^([A-ZÅÄÖ])\.*(\d+)$", raw)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}"
+
+    if raw.isdigit():
+        return f"_{raw}"
+
+    if len(raw) == 1 and raw.isalpha():
+        return raw.upper()
+
+    return raw
 
 # ========= Main extraction =========
 
@@ -98,6 +131,53 @@ def extract_raw_metadata(image: np.ndarray, filename: str) -> dict:
             text = " ".join([extract_text_from_crop(p) for p in parts])
         else:
             text = extract_text_from_crop(crop)
+
+        extracted[label] = text.strip()
+
+    for key in ORDER:
+        extracted.setdefault(key, "")
+
+    return extracted
+
+    if label == "ANDR":
+
+            if "ANDR" in extracted and extracted["ANDR"] not in ["", None, "_"]:
+                continue
+
+            raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+
+            if len(raw_lines) >= 2:
+                value_line = raw_lines[1]
+            else:
+                parts = segment_lines(crop)
+                extracted_lines = [
+                    extract_text_from_crop(p)
+                    for p in parts if extract_text_from_crop(p)
+                ]
+
+                if len(extracted_lines) >= 2:
+                    value_line = extracted_lines[1]
+                elif len(extracted_lines) == 1:
+                    temp = extracted_lines[0]
+                    temp = temp.replace("ÄNDR", "").replace("ANDR", "").replace(".", "").strip()
+                    value_line = temp if temp else "_"
+                else:
+                    value_line = "_"
+
+            value_line = value_line.replace(":", "_")
+
+            tokens = (
+                value_line.replace("|", "")
+                          .replace("•", "")
+                          .replace(":", "_")
+                          .split()
+            )
+
+            clean_value = clean_andr_field(tokens)
+
+            print(f"  🏷 {label}: {clean_value}")
+            extracted[label] = clean_value
+            continue
 
         extracted[label] = text.strip()
 
