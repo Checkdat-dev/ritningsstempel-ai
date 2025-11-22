@@ -131,16 +131,9 @@ def extract_raw_metadata(image: np.ndarray, filename: str) -> dict:
             text = " ".join([extract_text_from_crop(p) for p in parts])
         else:
             text = extract_text_from_crop(crop)
+        if label == "ANDR":
 
-        extracted[label] = text.strip()
-
-    for key in ORDER:
-        extracted.setdefault(key, "")
-
-    return extracted
-
-    if label == "ANDR":
-
+            # avoid overwriting
             if "ANDR" in extracted and extracted["ANDR"] not in ["", None, "_"]:
                 continue
 
@@ -173,12 +166,8 @@ def extract_raw_metadata(image: np.ndarray, filename: str) -> dict:
                           .split()
             )
 
-            clean_value = clean_andr_field(tokens)
-
-            print(f"  🏷 {label}: {clean_value}")
-            extracted[label] = clean_value
+            extracted["ANDR"] = clean_andr_field(tokens)
             continue
-
         extracted[label] = text.strip()
 
     for key in ORDER:
