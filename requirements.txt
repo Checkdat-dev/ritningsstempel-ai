@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+openpyxl        # for reading/writing .xlsx with pandas
+Pillow          # PIL.Image
+easyocr         # OCR engine
+ultralytics     # YOLOv8
+torch           # required by easyocr / ultralytics
+torchvision     # commonly needed with torch
+opencv-python-headless  # used by ultralytics, headless is safer on servers

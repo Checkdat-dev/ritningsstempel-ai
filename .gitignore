@@ -1,0 +1,31 @@
+# Virtual environment
+.venv/
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE settings
+.vscode/
+.idea/
+
+# YOLO / large models
+runs/
+*.pt
+*.pth
+*.onnx
+*.log
+
+# Data / outputs
+rawData.xlsx
+cleanData.xlsx
+*.xlsx
+debug_crops/
+symbol_crops/
+
+# Jupyter
+*.ipynb_checkpoints/
