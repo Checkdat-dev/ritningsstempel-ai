@@ -12,7 +12,7 @@ from cleanData import clean_data
 
 
 # Path to your YOLO weights
-MODEL_PATH = "runs\detect\train\weights\best.pt"
+MODEL_PATH = "weights\best.pt"
 
 # ---- Crop region fractions (same as your standalone script) ----
 LEFT_FRACTION   = 0.76
