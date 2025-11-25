@@ -8,3 +8,6 @@ ultralytics     # YOLOv8
 torch           # required by easyocr / ultralytics
 torchvision     # commonly needed with torch
 opencv-python-headless  # used by ultralytics, headless is safer on servers
+pymupdf
+xlsxwriter
+
