@@ -12,7 +12,7 @@ from cleanData import clean_data
 # ---------- Paths ----------
 # Assume your YOLO weights are stored in:  models/best.pt  (relative to this file)
 BASE_DIR = Path(__file__).parent
-MODEL_PATH = BASE_DIR / "models" / "best.pt"   # <--- put your custom YOLO weights here
+MODEL_PATH = BASE_DIR / "weights" / "best.pt"   # <--- put your custom YOLO weights here
 
 
 # ---------- Crop region (stamp area) ----------
