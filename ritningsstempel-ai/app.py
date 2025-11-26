@@ -1,157 +1,265 @@
 import io
+import urllib.request
 from pathlib import Path
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 from PIL import Image
+import numpy as np
 import fitz  # PyMuPDF
+import cv2
 
 from dataextractionsystem import extract_from_pages
 from cleanData import clean_data
 
+# ---------------------- MODEL PATH & DOWNLOAD ---------------------- #
 
-# ---------- Paths ----------
 BASE_DIR = Path(__file__).parent
-# Your custom YOLO model lives here:
-MODEL_PATH = BASE_DIR / "weights" / "best.pt"  # <-- make sure this file exists in the repo
+MODEL_PATH = BASE_DIR / "weights" / "best.pt"
+
+# Your Google Drive direct download URL
+MODEL_URL = "https://drive.google.com/uc?export=download&id=1Mmb_tS6vyUhOWbgxdjAfPDUoWI2eIYnl"
 
 
-# ---------- Crop region (stamp area) ----------
-LEFT_FRACTION = 0.76
-TOP_FRACTION = 0.88
-RIGHT_FRACTION = 1.00
+def ensure_model_downloaded():
+    """Download YOLO weights from Google Drive if not present."""
+    if not MODEL_PATH.exists():
+        st.warning("Downloading YOLO model weights... Please wait.")
+        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+        st.success("Model downloaded!")
+
+
+# ---- Crop region fractions (same as your standalone script) ----
+LEFT_FRACTION   = 0.76
+TOP_FRACTION    = 0.88
+RIGHT_FRACTION  = 1.00
 BOTTOM_FRACTION = 0.97
 
 
 def crop_metadata_region(pil_img: Image.Image) -> Image.Image:
-    """
-    Crop the bottom-right metadata block using fixed fractions of image size.
-    """
+    """Crop the bottom-right metadata block using your fraction rules."""
     W, H = pil_img.size
 
-    left = int(W * LEFT_FRACTION)
-    top = int(H * TOP_FRACTION)
-    right = int(W * RIGHT_FRACTION)
+    left   = int(W * LEFT_FRACTION)
+    top    = int(H * TOP_FRACTION)
+    right  = int(W * RIGHT_FRACTION)
     bottom = int(H * BOTTOM_FRACTION)
 
     # Clamp to image bounds
-    left = max(0, min(left, W))
-    right = max(0, min(right, W))
-    top = max(0, min(top, H))
+    left   = max(0, min(left, W))
+    right  = max(0, min(right, W))
+    top    = max(0, min(top, H))
     bottom = max(0, min(bottom, H))
 
     if right <= left or bottom <= top:
-        # fallback: return original if cropping fails
+        # fallback: return original if something went weird
         return pil_img
 
     return pil_img.crop((left, top, right, bottom))
 
 
-def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    """
-    Convert a DataFrame to Excel bytes for download_button.
-    """
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="Sheet1")
-    return out.getvalue()
+# ---------------------- PAGE CONFIG & CSS ---------------------- #
 
-
-# ---------- Streamlit UI ----------
-st.set_page_config(page_title="Checkdat – PDF to Metadata", layout="wide")
-
-st.title("📄 CHECKDAT (PDF To Metadata Extraction)")
-st.write(
-    "Upload a PDF drawing, extract the metadata stamp with YOLO + OCR, "
-    "and download both raw and cleaned Excel files."
+st.set_page_config(
+    page_title="Metadata Extractor",
+    page_icon="📄",
+    layout="wide",
 )
 
-uploaded_pdf = st.file_uploader("Upload a PDF drawing", type=["pdf"])
-
-if uploaded_pdf is not None:
-    st.info(f"File uploaded: {uploaded_pdf.name}")
-
-    if st.button("🔍 Run extraction"):
-        # Check if YOLO weights exist
-        if not MODEL_PATH.exists():
-            st.error(
-                f"YOLO weights not found at:\n`{MODEL_PATH}`\n\n"
-                "Please add your trained model file (e.g. `best.pt`) "
-                "to a `weights/` folder in the repo."
-            )
-            st.stop()
-
-        # 1) PDF -> cropped page images
-        st.write("Converting PDF pages to images...")
-        file_bytes = uploaded_pdf.read()
-        doc = fitz.open(stream=file_bytes, filetype="pdf")
-
-        pages = []
-        for i, page in enumerate(doc):
-            # Render page at 300 dpi
-            pix = page.get_pixmap(dpi=300)
-            full_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-            # Crop to stamp area
-            cropped_img = crop_metadata_region(full_img)
-
-            # Store as (PIL image, page identifier)
-            page_name = f"{uploaded_pdf.name}_page_{i+1}"
-            pages.append((cropped_img, page_name))
-
-        st.write(f"Found {len(pages)} cropped pages, running YOLO + OCR...")
-
-        # 2) Raw extraction with YOLO + OCR
-        with st.spinner("Running YOLO + OCR on stamp regions..."):
-            df_raw = extract_from_pages(pages, MODEL_PATH)
-
-        if df_raw.empty:
-            st.warning("No metadata could be extracted from this PDF.")
-            st.stop()
-
-        st.success("Raw extraction complete!")
-
-        # 3) Cleaning
-        with st.spinner("Cleaning data..."):
-            df_clean = clean_data(df_raw)
-
-        st.success("Cleaning complete!")
-
-        # 4) Show tables
-        st.subheader("📊 Raw data")
-        st.dataframe(df_raw, use_container_width=True)
-
-        st.subheader("🧹 Clean data")
-        st.dataframe(df_clean, use_container_width=True)
-
-        # 5) Download as Excel
-        raw_xlsx = df_to_excel_bytes(df_raw)
-        clean_xlsx = df_to_excel_bytes(df_clean)
-
-        st.download_button(
-            label="⬇️ Download RAW data (Excel)",
-            data=raw_xlsx,
-            file_name="rawData.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-        st.download_button(
-            label="⬇️ Download CLEAN data (Excel)",
-            data=clean_xlsx,
-            file_name="cleanData.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-# --------- Simple style tweak ----------
+# Simple CSS – silver background
 st.markdown(
     """
     <style>
     .stApp {
-        background-color: #C0C0C0 !important;
+        background-color: #C0C0C0 !important;  /* Silver */
         color: black;
+    }
+    .big-title {
+        text-align: center;
+        font-size: 2.4rem;
+        font-weight: 700;
+        padding: 0.5rem 0 1rem 0;
+        color: #111827;
+    }
+    .subtitle {
+        text-align: center;
+        font-size: 0.95rem;
+        color: #4b5563;
+        margin-bottom: 1.5rem;
+    }
+    .glass-card {
+        background: rgba(243, 244, 246, 0.9);
+        border-radius: 18px;
+        padding: 1.2rem 1.4rem;
+        border: 1px solid rgba(148, 163, 184, 0.8);
+        box-shadow: 0 12px 28px rgba(148, 163, 184, 0.6);
+    }
+    .metric-card {
+        background: rgba(243, 244, 246, 0.95);
+        border-radius: 14px;
+        padding: 0.9rem 1.1rem;
+        border: 1px solid rgba(148, 163, 184, 0.8);
+        text-align: center;
+    }
+    .metric-label {
+        font-size: 0.8rem;
+        color: #6b7280;
+        margin-bottom: 0.3rem;
+    }
+    .metric-value {
+        font-size: 1.3rem;
+        font-weight: 700;
+        color: #111827;
+    }
+    .small-caption {
+        font-size: 0.78rem;
+        color: #6b7280;
+        margin-top: 0.2rem;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+# ---------------------- SIDEBAR ---------------------- #
+
+with st.sidebar:
+    st.markdown("### ⚙️ Settings")
+    st.write("Upload a PDF and run the extractor on its metadata block.")
+
+    uploaded_pdf = st.file_uploader("PDF drawing", type=["pdf"])
+
+    dpi = st.slider("Render DPI", 150, 400, 300, step=50, help="Resolution for PDF → image conversion")
+    show_first_crop = st.checkbox("Show first cropped page preview", value=True)
+
+    run_button = st.button("🔍 Run extraction", use_container_width=True)
+
+# ---------------------- MAIN TITLE ---------------------- #
+
+st.markdown('<div class="big-title">Metadata Extraction (YOLO + OCR)</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="subtitle">Upload PDF drawings, auto-detect the metadata block, '
+    "run YOLO + EasyOCR, and download both raw and clean Excel outputs.</div>",
+    unsafe_allow_html=True,
+)
+
+if uploaded_pdf is None:
+    st.info("⬅️ Start by uploading a PDF file in the sidebar.")
+    st.stop()
+
+if run_button:
+    # Make sure model is available
+    ensure_model_downloaded()
+
+    with st.spinner("Reading PDF and cropping pages..."):
+        file_bytes = uploaded_pdf.read()
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+
+        pages_cv2 = []
+        first_cropped_pil = None
+
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(dpi=dpi)
+            full_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            # Crop to metadata block
+            cropped_img = crop_metadata_region(full_img)
+
+            if i == 0:
+                first_cropped_pil = cropped_img
+
+            # PIL -> OpenCV (np.ndarray, BGR)
+            img_cv2 = cv2.cvtColor(np.array(cropped_img), cv2.COLOR_RGB2BGR)
+            pages_cv2.append((img_cv2, f"{uploaded_pdf.name}_page_{i+1}"))
+
+    # Preview first cropped region if requested
+    if show_first_crop and first_cropped_pil is not None:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.markdown("#### 🧩 Cropped metadata block preview (page 1)")
+        st.image(first_cropped_pil, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.write("")
+    st.write(f"Found **{len(pages_cv2)}** cropped pages, running YOLO + OCR...")
+
+    # 2) Extract RAW data
+    with st.spinner("Extracting raw metadata..."):
+        df_raw = extract_from_pages(pages_cv2, MODEL_PATH)
+
+    if df_raw.empty:
+        st.warning("No metadata could be extracted from this PDF.")
+        st.stop()
+
+    # 3) Clean data
+    with st.spinner("Cleaning data..."):
+        df_clean = clean_data(df_raw)
+
+    # ---------------------- SUMMARY METRICS ---------------------- #
+    st.markdown("")
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-label">Pages processed</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">{len(pages_cv2)}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-caption">From uploaded PDF</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col2:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-label">Rows extracted</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">{len(df_raw)}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-caption">Uncleaned metadata</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col3:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-label">Columns</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">{len(df_raw.columns)}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-caption">(incl. Image)</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.success("✅ Extraction and cleaning complete!")
+
+    # ---------------------- TABS: RAW vs CLEAN ---------------------- #
+    st.markdown("")
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["📊 Raw data", "🧹 Clean data"])
+
+    with tab1:
+        st.dataframe(df_raw, use_container_width=True, height=420)
+
+    with tab2:
+        st.dataframe(df_clean, use_container_width=True, height=420)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ---------------------- DOWNLOAD BUTTONS ---------------------- #
+    def to_excel_bytes(df: pd.DataFrame) -> bytes:
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+            df.to_excel(writer, index=False, sheet_name="Sheet1")
+        return out.getvalue()
+
+    raw_xlsx = to_excel_bytes(df_raw)
+    clean_xlsx = to_excel_bytes(df_clean)
+
+    st.markdown("")
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        st.download_button(
+            label="⬇️ Download RAW data (Excel)",
+            data=raw_xlsx,
+            file_name="rawData.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with dl_col2:
+        st.download_button(
+            label="⬇️ Download CLEAN data (Excel)",
+            data=clean_xlsx,
+            file_name="cleanData.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
