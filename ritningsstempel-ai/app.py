@@ -8,6 +8,7 @@ from PIL import Image
 import numpy as np
 import fitz  # PyMuPDF
 import cv2
+import requests  # << NEW: robust Google Drive download
 
 from dataextractionsystem import extract_from_pages
 from cleanData import clean_data
@@ -17,17 +18,46 @@ from cleanData import clean_data
 BASE_DIR = Path(__file__).parent
 MODEL_PATH = BASE_DIR / "weights" / "best.pt"
 
-# Your Google Drive direct download URL
-MODEL_URL = "https://drive.google.com/uc?export=download&id=1Mmb_tS6vyUhOWbgxdjAfPDUoWI2eIYnl"
+# Your Google Drive file ID
+FILE_ID = "1Mmb_tS6vyUhOWbgxdjAfPDUoWI2eIYnl"
+
+
+def download_file_from_google_drive(file_id: str, destination: Path):
+    """
+    Robust Google Drive downloader that handles the 'too large to scan' confirm token.
+    """
+    URL = "https://docs.google.com/uc?export=download"
+
+    session = requests.Session()
+
+    response = session.get(URL, params={"id": file_id}, stream=True)
+    token = None
+    for key, value in response.cookies.items():
+        if key.startswith("download_warning"):
+            token = value
+            break
+
+    if token:
+        params = {"id": file_id, "confirm": token}
+        response = session.get(URL, params=params, stream=True)
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with open(destination, "wb") as f:
+        for chunk in response.iter_content(32768):
+            if chunk:
+                f.write(chunk)
 
 
 def ensure_model_downloaded():
     """Download YOLO weights from Google Drive if not present."""
     if not MODEL_PATH.exists():
-        st.warning("Downloading YOLO model weights... Please wait.")
-        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+        st.warning("Downloading YOLO model weights from Google Drive... Please wait.")
+        download_file_from_google_drive(FILE_ID, MODEL_PATH)
         st.success("Model downloaded!")
+
+    # Debug: show file size so we know it's not just HTML
+    size = MODEL_PATH.stat().st_size
+    st.write(f"Model file size on disk: {size} bytes")
 
 
 # ---- Crop region fractions (same as your standalone script) ----
