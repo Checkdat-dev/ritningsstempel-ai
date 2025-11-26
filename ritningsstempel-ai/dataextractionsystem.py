@@ -1,7 +1,7 @@
-# dataextractionsystem.py
 import os
 from pathlib import Path
-import re
+from typing import List, Tuple, Dict, Any
+
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -9,207 +9,10 @@ import easyocr
 from ultralytics import YOLO
 
 # --------------------------------------------------
-# 1) Global OCR reader (Swedish + English)
+# Labels detected by YOLO and returned in the Excel
+# (must match your training YAML / class names)
 # --------------------------------------------------
-# Created once so Streamlit doesn't re-initialize it on every call
-reader = easyocr.Reader(["sv", "en"], gpu=False)
-
-
-# --------------------------------------------------
-# 2) Helpers
-# --------------------------------------------------
-def normalize_text(text: str) -> str:
-    """Light whitespace normalisation."""
-    if not text:
-        return ""
-    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-def safe_name(s: str) -> str:
-    """
-    Make a string safe for filenames:
-    replace anything not A-Z, a-z, 0-9, ., _, - with underscore.
-    """
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", s)
-
-
-def clean_andr_field(tokens):
-    """
-    tokens: list of OCR token strings (e.g. from EasyOCR)
-    """
-    raw = "".join(t.strip() for t in tokens if t and t.strip() != "")
-    raw = raw.strip()
-    raw_up = raw.upper()
-
-    # NEW: if field is 'ÄNDR.' (or 'ÄNDR'), map to '-'
-    if raw_up.replace(" ", "") in ("ÄNDR.", "ÄNDR"):
-        return "-"
-
-    underscore_chars = set(["_", "-", "—", "–", "|", "L", "I", ".", "‒"])
-
-    # Empty or only underscore-like chars → "_"
-    if raw_up == "" or all(ch in underscore_chars for ch in raw_up):
-        return "_"
-
-    # underscores + number  e.g. "__2" -> "_.2"
-    m = re.match(r"^[_\-\—\–\.]+(\d+)$", raw_up)
-    if m:
-        return f"_.{m.group(1)}"
-
-    # just underscore-like
-    if raw_up in underscore_chars:
-        return "_"
-
-    # underscores + letter e.g. "__B" -> "_B"
-    m = re.match(r"^[_\-\—\–\.]+([A-ZÅÄÖ])$", raw_up)
-    if m:
-        return f"_{m.group(1)}"
-
-    # A2 / A.2 / A..2 etc -> "A.2"
-    m = re.match(r"^([A-ZÅÄÖ])\.?(\d+)$", raw_up)
-    if m:
-        return f"{m.group(1)}.{m.group(2)}"
-
-    m = re.match(r"^([A-ZÅÄÖ])\.*(\d+)$", raw_up)
-    if m:
-        return f"{m.group(1)}.{m.group(2)}"
-
-    # numbers only -> "_.<num>"
-    if raw_up.isdigit():
-        return f"_.{raw_up}"
-
-    # single letter only
-    if len(raw_up) == 1 and raw_up.isalpha():
-        return raw_up
-
-    # fallback
-    return raw_up
-
-
-def detect_line_symbol_and_image(crop_img: Image.Image):
-    gray = np.array(crop_img.convert("L"))
-    h, w = gray.shape
-
-    # Look mostly in the lower part of the box
-    start = int(h * 0.5)
-    end = int(h * 0.95)
-    roi = gray[start:end, :]
-
-    mask = roi < 230  # dark pixels
-    if mask.mean() < 0.0001:
-        return None, None
-
-    ys, xs = np.where(mask)
-    if len(ys) == 0:
-        return None, None
-
-    y_min, y_max = ys.min(), ys.max()
-    x_min, x_max = xs.min(), xs.max()
-    line_h = y_max - y_min + 1
-    line_w = x_max - x_min + 1
-
-    # wide & thin = line
-    if line_h > 8:
-        return None, None
-    if line_w < w * 0.2:
-        return None, None
-
-    dark_vals = roi[mask]
-    mean_dark = dark_vals.mean()
-
-    if mean_dark < 70:
-        symbol = "―"
-    elif mean_dark < 150:
-        symbol = "_"
-    else:
-        symbol = "-"
-
-    abs_y1 = start + y_min
-    abs_y2 = start + y_max
-    abs_x1 = x_min
-    abs_x2 = x_max
-
-    symbol_img = crop_img.crop((abs_x1, abs_y1, abs_x2 + 1, abs_y2 + 1))
-
-    return symbol, symbol_img
-
-
-def ocr_first_three_lines(img: Image.Image, try_vertical_if_empty: bool = True):
-    """
-    Uses EasyOCR to extract up to the first 3 text 'lines' from an image.
-    - Groups OCR boxes by y-position into lines.
-    - If nothing found and try_vertical_if_empty=True, rotates 90° and tries again.
-    Returns: list of up to 3 strings.
-    """
-
-    def _lines_from_img(pil_img: Image.Image):
-        arr = np.array(pil_img)
-        # detail=1 -> [ [bbox, text, conf], ... ]
-        results = reader.readtext(arr, detail=1)
-        items = []
-
-        for bbox, text, conf in results:
-            text = text.strip()
-            if not text:
-                continue
-            # bbox = [(x1,y1), (x2,y2), (x3,y3), (x4,y4)]
-            y_coords = [p[1] for p in bbox]
-            y_center = sum(y_coords) / len(y_coords)
-            items.append((y_center, text))
-
-        if not items:
-            return []
-
-        # sort by vertical center
-        items.sort(key=lambda x: x[0])
-
-        # group into "lines" based on y difference
-        lines = []
-        current_y = None
-        current_tokens = []
-        y_thresh = 10  # pixels
-
-        for y, text in items:
-            if current_y is None:
-                current_y = y
-                current_tokens = [text]
-            elif abs(y - current_y) <= y_thresh:
-                current_tokens.append(text)
-            else:
-                line = normalize_text(" ".join(current_tokens))
-                if line:
-                    lines.append(line)
-                current_y = y
-                current_tokens = [text]
-
-        if current_tokens:
-            line = normalize_text(" ".join(current_tokens))
-            if line:
-                lines.append(line)
-
-        # Only first 3 lines
-        return lines[:3]
-
-    # 1) Try normal orientation (horizontal text)
-    lines = _lines_from_img(img)
-    if lines:
-        return lines
-
-    # 2) If nothing, try vertical text (rotate 90°)
-    if try_vertical_if_empty:
-        img_rot = img.rotate(90, expand=True)
-        lines_rot = _lines_from_img(img_rot)
-        return lines_rot
-
-    return []
-
-
-# --------------------------------------------------
-# 3) Labels / columns
-# --------------------------------------------------
-LABELS = [
+LABELS: List[str] = [
     "Anläggningstyp",
     "Avdelning",
     "Bandel",
@@ -240,208 +43,245 @@ LABELS = [
     "Översiktsplan",
 ]
 
-
-def list_images(folder: Path):
-    exts = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
-    return [p for p in folder.iterdir() if p.suffix.lower() in exts]
+# --------------------------------------------------
+# OCR initialisation (Swedish + English)
+# --------------------------------------------------
+reader = easyocr.Reader(["sv", "en"], gpu=False)
 
 
 # --------------------------------------------------
-# 4) Core: process a single image (PIL) into a row dict
+# Helper functions
+# --------------------------------------------------
+def list_images(image_dir: Path) -> List[Path]:
+    exts = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
+    return sorted(
+        p for p in image_dir.iterdir() if p.is_file() and p.suffix.lower() in exts
+    )
+
+
+def normalize_text(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = " ".join(text.split())
+    return text
+
+
+def safe_name(s: str) -> str:
+    """Make a string safe for filenames."""
+    import re
+
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", s)
+
+
+def ocr_lines_from_crop(crop: Image.Image, max_lines: int = 3) -> List[str]:
+    """
+    Run EasyOCR on the crop and return up to max_lines lines.
+    """
+    np_img = np.array(crop)
+    results = reader.readtext(np_img, detail=0)  # list of strings
+
+    lines: List[str] = []
+    for t in results:
+        for line in str(t).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            lines.append(line)
+            if len(lines) >= max_lines:
+                break
+        if len(lines) >= max_lines:
+            break
+
+    return lines[:max_lines]
+
+
+def clean_andr_field(tokens: List[str]) -> str:
+    """
+    Clean the 'Ändring' field based on OCR tokens.
+    This is a simplified version of your more advanced logic, but
+    follows the same idea: normalise symbols and A2 / A.2 etc.
+    """
+    import re
+
+    raw = "".join(t.strip() for t in tokens if t and t.strip())
+    raw = raw.strip()
+    raw_up = raw.upper()
+
+    # Field is just 'ÄNDR.' etc -> treat as "-"
+    if raw_up.replace(" ", "") in ("ÄNDR.", "ÄNDR"):
+        return "-"
+
+    underscore_chars = set(["_", "-", "—", "–", "|", "L", "I", ".", "‒"])
+
+    if raw_up == "" or all(ch in underscore_chars for ch in raw_up):
+        return "_"
+
+    # "__2" -> "_.2"
+    m = re.match(r"^[_\-\—\–\.]+(\d+)$", raw_up)
+    if m:
+        return f"_.{m.group(1)}"
+
+    if raw_up in underscore_chars:
+        return "_"
+
+    # "__B" -> "_B"
+    m = re.match(r"^[_\-\—\–\.]+([A-ZÅÄÖ])$", raw_up)
+    if m:
+        return f"_{m.group(1)}"
+
+    # "A2" or "A.2" or "A..2" -> "A.2"
+    m = re.match(r"^([A-ZÅÄÖ])\.*(\d+)$", raw_up)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}"
+
+    # Default: return original (normalised spacing)
+    return raw_up
+
+
+# --------------------------------------------------
+# Core: process a single image with YOLO + OCR
 # --------------------------------------------------
 def process_single_image(
     pil_img: Image.Image,
-    img_name: str,
-    model,
-    names,
-    save_debug_crops: bool = False,
-    debug_dir: Path | None = None,
-    save_symbol_images: bool = False,
-    symbol_dir: Path | None = None,
-):
-    w_img, h_img = pil_img.size
+    fname: str,
+    model: YOLO,
+    class_names: Dict[int, str],
+) -> Dict[str, Any]:
+    """
+    Run YOLO on a single image, OCR each detected label region,
+    and return a dict with keys: "Image" + LABELS.
+    """
+    row: Dict[str, Any] = {"Image": fname}
+    for label in LABELS:
+        row[label] = ""
 
-    # Prepare row
-    row = {label: "" for label in LABELS}
-    row["Image"] = img_name
+    # YOLO inference
+    np_img = np.array(pil_img)
+    results = model.predict(source=np_img, verbose=False)
 
-    # Run YOLO
-    results = model(pil_img)
-    result = results[0]
-
-    if result.boxes is None or len(result.boxes) == 0:
+    if not results:
         return row
 
-    for i, box in enumerate(result.boxes):
-        cls_id = int(box.cls[0])
-        label_name = names.get(cls_id, str(cls_id))
+    r = results[0]
 
-        # Only care about the labels we defined
+    if r.boxes is None or len(r.boxes) == 0:
+        return row
+
+    boxes = r.boxes.xyxy.cpu().numpy().astype(int)
+    classes = r.boxes.cls.cpu().numpy().astype(int)
+
+    for (x1, y1, x2, y2), cls_id in zip(boxes, classes):
+        label_name = str(class_names[int(cls_id)])
+
+        # We assume your YOLO class names match the labels exactly
         if label_name not in LABELS:
             continue
 
-        xyxy = box.xyxy[0].cpu().numpy().astype(int)
-        x1, y1, x2, y2 = xyxy
-        x1 = max(0, x1)
-        y1 = max(0, y1)
-        x2 = min(w_img, x2)
-        y2 = min(h_img, y2)
-
+        # Crop region
         crop = pil_img.crop((x1, y1, x2, y2))
 
-        # Save debug crop (with safe filename)
-        if save_debug_crops and debug_dir is not None:
-            safe_label = safe_name(label_name)
-            debug_name = f"{Path(img_name).stem}_{safe_label}_{i}.png"
-            crop.save(debug_dir / debug_name)
-
-        # Detect line symbol in crop
-        symbol_char, symbol_img = detect_line_symbol_and_image(crop)
-        if save_symbol_images and symbol_dir is not None and symbol_char is not None and symbol_img is not None:
-            safe_label = safe_name(label_name)
-            sym_name = f"{Path(img_name).stem}_{safe_label}_{i}_symbol.png"
-            symbol_img.save(symbol_dir / sym_name)
-
-        # -------------------------------
-        # Special logic per field
-        # -------------------------------
         if label_name == "Ändring":
-            ocr_tokens = reader.readtext(np.array(crop), detail=0)  # list of strings
-            cleaned_andr = clean_andr_field(ocr_tokens)
-
-            # If only underscores / empty but we have a line symbol, use symbol
-            if cleaned_andr in ["", "_"] and symbol_char is not None:
-                row["Ändring"] = symbol_char
-            else:
-                row["Ändring"] = cleaned_andr
-
+            tokens = reader.readtext(np.array(crop), detail=0)
+            cleaned = clean_andr_field(tokens)
+            row["Ändring"] = cleaned
         else:
-            # Default: take 1–3 lines (horizontal, fallback vertical)
-            lines = ocr_first_three_lines(crop, try_vertical_if_empty=True)
-            # Join lines with newline for Excel multi-line cell
-            row[label_name] = "\n".join(lines)
+            lines = ocr_lines_from_crop(crop, max_lines=3)
+            text = "\n".join(lines)
+            text = normalize_text(text)
+
+            # If multiple boxes for same label, append
+            if row[label_name]:
+                if text:
+                    row[label_name] = f"{row[label_name]}\n{text}"
+            else:
+                row[label_name] = text
 
     return row
 
 
 # --------------------------------------------------
-# 5) Folder-based extraction (old behaviour)
+# 1) Folder-based extraction (for local scripts)
 # --------------------------------------------------
 def run_extraction(
-    image_dir,
-    excel_out,
-    model_path,
-    save_debug_crops: bool = False,
-    debug_dir: str | Path | None = None,
-    save_symbol_images: bool = False,
-    symbol_dir: str | Path | None = None,
-):
+    image_dir: str | Path,
+    excel_out: str | Path,
+    model_path: str | Path,
+) -> pd.DataFrame:
     """
-    Main entry point used by scripts:
-    - image_dir: folder with drawing images
-    - excel_out: path to write rawData.xlsx
-    - model_path: YOLO weights path, e.g. 'runs/detect/train/weights/best.pt'
+    Run YOLO + OCR on all images in image_dir and save rawData.xlsx.
     """
-
     image_dir = Path(image_dir)
     excel_out = Path(excel_out)
 
-    # Prepare optional dirs
-    debug_dir = Path(debug_dir) if debug_dir is not None else image_dir / "debug_crops"
-    symbol_dir = Path(symbol_dir) if symbol_dir is not None else image_dir / "symbol_crops"
-
-    if save_debug_crops:
-        os.makedirs(debug_dir, exist_ok=True)
-    if save_symbol_images:
-        os.makedirs(symbol_dir, exist_ok=True)
-
-    # Load YOLO model
     model = YOLO(str(model_path))
-    names = model.names  # {class_id: class_name}
+    class_names = model.names  # {class_id: class_name}
 
-    data_rows = []
-    image_paths = list_images(image_dir)
+    rows: List[Dict[str, Any]] = []
 
-    for img_path in image_paths:
+    for img_path in list_images(image_dir):
         pil_img = Image.open(img_path).convert("RGB")
-        row = process_single_image(
-            pil_img,
-            img_path.name,
-            model,
-            names,
-            save_debug_crops=save_debug_crops,
-            debug_dir=debug_dir,
-            save_symbol_images=save_symbol_images,
-            symbol_dir=symbol_dir,
-        )
-        data_rows.append(row)
+        row = process_single_image(pil_img, img_path.name, model, class_names)
+        rows.append(row)
 
-    # Save to Excel
     all_columns = ["Image"] + LABELS
-    df = pd.DataFrame(data_rows, columns=all_columns)
+    df = pd.DataFrame(rows, columns=all_columns)
     excel_out.parent.mkdir(parents=True, exist_ok=True)
     df.to_excel(excel_out, index=False)
 
-    return str(excel_out)
-
-
-# --------------------------------------------------
-# 6) Page-based extraction for Streamlit (PDF -> images)
-# --------------------------------------------------
-def extract_from_pages(pages, model_path):
-    """
-    For Streamlit:
-    pages: list of (img, filename) tuples
-        - img can be a NumPy array or a PIL.Image.Image
-    model_path: path to YOLO weights
-
-    Returns: (pd.DataFrame) with same columns as run_extraction
-    """
-    # Load YOLO once
-    model = YOLO(str(model_path))
-    names = model.names
-
-    data_rows = []
-
-    for img, fname in pages:
-        # Ensure we have a PIL image
-        if isinstance(img, Image.Image):
-            pil_img = img.convert("RGB")
-        else:
-            # assume NumPy array
-            pil_img = Image.fromarray(img)
-
-        row = process_single_image(
-            pil_img,
-            fname,
-            model,
-            names,
-            save_debug_crops=False,
-            debug_dir=None,
-            save_symbol_images=False,
-            symbol_dir=None,
-        )
-        data_rows.append(row)
-
-    all_columns = ["Image"] + LABELS
-    df = pd.DataFrame(data_rows, columns=all_columns)
     return df
 
 
 # --------------------------------------------------
-# 7) CLI example
+# 2) Page-based extraction (used by Streamlit: PDF -> images)
+# --------------------------------------------------
+def extract_from_pages(
+    pages: List[Tuple[Image.Image | np.ndarray, str]],
+    model_path: str | Path,
+) -> pd.DataFrame:
+    """
+    For Streamlit:
+    pages: list of (img, filename) tuples
+           img can be a NumPy array OR a PIL.Image.Image
+    model_path: path to YOLO weights (e.g. models/best.pt)
+
+    Returns: DataFrame with columns ["Image"] + LABELS.
+    """
+    model = YOLO(str(model_path))
+    class_names = model.names
+
+    rows: List[Dict[str, Any]] = []
+
+    for img, fname in pages:
+        if isinstance(img, Image.Image):
+            pil_img = img.convert("RGB")
+        else:
+            pil_img = Image.fromarray(img)
+
+        row = process_single_image(pil_img, fname, model, class_names)
+        rows.append(row)
+
+    all_columns = ["Image"] + LABELS
+    df = pd.DataFrame(rows, columns=all_columns)
+    return df
+
+
+# --------------------------------------------------
+# CLI example (optional)
 # --------------------------------------------------
 if __name__ == "__main__":
-    # Example CLI usage (edit paths as needed)
-    default_model = r"runs/detect/train/weights/best.pt"
-    default_image_dir = r"cropsImages_flat"
-    default_excel_out = r"rawData.xlsx"
+    # Simple example: run on all images in ./cropsImages_flat with ./models/best.pt
+    default_image_dir = Path("cropsImages_flat")
+    default_model = Path("models") / "best.pt"
+    default_excel_out = Path("rawData.xlsx")
 
-    run_extraction(
-        image_dir=default_image_dir,
-        excel_out=default_excel_out,
-        model_path=default_model,
-        save_debug_crops=True,
-        save_symbol_images=True,
-    )
-    print("✅ Extraction completed:", default_excel_out)
+    if not default_model.exists():
+        print(f"❌ Model file not found: {default_model}")
+    elif not default_image_dir.exists():
+        print(f"❌ Image folder not found: {default_image_dir}")
+    else:
+        df_result = run_extraction(
+            image_dir=default_image_dir,
+            excel_out=default_excel_out,
+            model_path=default_model,
+        )
+        print("✅ Extraction completed:", default_excel_out)
+        print(df_result.head())

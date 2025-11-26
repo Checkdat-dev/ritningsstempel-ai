@@ -1,11 +1,11 @@
 streamlit
 pandas
 numpy
-openpyxl
-Pillow
+pillow
+pymupdf        # for fitz
 easyocr
 ultralytics
 torch
 torchvision
-PyMuPDF
-
+opencv-python-headless
+xlsxwriter
