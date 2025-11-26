@@ -9,3 +9,14 @@ torch
 torchvision
 opencv-python-headless
 xlsxwriter
+streamlit
+pandas
+numpy
+Pillow
+PyMuPDF
+easyocr
+ultralytics
+torch
+torchvision
+opencv-python-headless
+xlsxwriter

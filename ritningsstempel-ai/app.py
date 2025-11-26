@@ -1,18 +1,20 @@
 import io
 from pathlib import Path
+
 import streamlit as st
 import pandas as pd
-from PIL import Image
 import numpy as np
+from PIL import Image
 import fitz  # PyMuPDF
+
 from dataextractionsystem import extract_from_pages
 from cleanData import clean_data
 
 
 # ---------- Paths ----------
-# Assume your YOLO weights are stored in:  models/best.pt  (relative to this file)
 BASE_DIR = Path(__file__).parent
-MODEL_PATH = BASE_DIR / "weights" / "best.pt"   # <--- put your custom YOLO weights here
+# Your custom YOLO model lives here:
+MODEL_PATH = BASE_DIR / "weights" / "best.pt"  # <-- make sure this file exists in the repo
 
 
 # ---------- Crop region (stamp area) ----------
@@ -46,12 +48,24 @@ def crop_metadata_region(pil_img: Image.Image) -> Image.Image:
     return pil_img.crop((left, top, right, bottom))
 
 
+def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    """
+    Convert a DataFrame to Excel bytes for download_button.
+    """
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Sheet1")
+    return out.getvalue()
+
+
 # ---------- Streamlit UI ----------
 st.set_page_config(page_title="Checkdat – PDF to Metadata", layout="wide")
 
 st.title("📄 CHECKDAT (PDF To Metadata Extraction)")
-st.write("Upload a PDF drawing, extract the metadata stamp with YOLO + OCR, and download clean Excel.")
-
+st.write(
+    "Upload a PDF drawing, extract the metadata stamp with YOLO + OCR, "
+    "and download both raw and cleaned Excel files."
+)
 
 uploaded_pdf = st.file_uploader("Upload a PDF drawing", type=["pdf"])
 
@@ -59,78 +73,77 @@ if uploaded_pdf is not None:
     st.info(f"File uploaded: {uploaded_pdf.name}")
 
     if st.button("🔍 Run extraction"):
+        # Check if YOLO weights exist
         if not MODEL_PATH.exists():
             st.error(
                 f"YOLO weights not found at:\n`{MODEL_PATH}`\n\n"
                 "Please add your trained model file (e.g. `best.pt`) "
-                "to a `models/` folder in the repo."
+                "to a `weights/` folder in the repo."
             )
-        else:
-            # 1) PDF -> cropped page images
-            st.write("Converting PDF pages to images...")
-            file_bytes = uploaded_pdf.read()
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            st.stop()
 
-            pages = []
-            for i, page in enumerate(doc):
-                pix = page.get_pixmap(dpi=300)
-                full_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        # 1) PDF -> cropped page images
+        st.write("Converting PDF pages to images...")
+        file_bytes = uploaded_pdf.read()
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
 
-                cropped_img = crop_metadata_region(full_img)
+        pages = []
+        for i, page in enumerate(doc):
+            # Render page at 300 dpi
+            pix = page.get_pixmap(dpi=300)
+            full_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-                # Store as PIL image; dataextractionsystem can handle PIL or NumPy
-                pages.append((cropped_img, f"{uploaded_pdf.name}_page_{i+1}"))
+            # Crop to stamp area
+            cropped_img = crop_metadata_region(full_img)
 
-            st.write(f"Found {len(pages)} cropped pages, running YOLO + OCR...")
+            # Store as (PIL image, page identifier)
+            page_name = f"{uploaded_pdf.name}_page_{i+1}"
+            pages.append((cropped_img, page_name))
 
-            # 2) Raw extraction
-            with st.spinner("Running YOLO + OCR on stamp regions..."):
-                df_raw = extract_from_pages(pages, MODEL_PATH)
+        st.write(f"Found {len(pages)} cropped pages, running YOLO + OCR...")
 
-            if df_raw.empty:
-                st.warning("No metadata could be extracted from this PDF.")
-                st.stop()
+        # 2) Raw extraction with YOLO + OCR
+        with st.spinner("Running YOLO + OCR on stamp regions..."):
+            df_raw = extract_from_pages(pages, MODEL_PATH)
 
-            st.success("Raw extraction complete!")
+        if df_raw.empty:
+            st.warning("No metadata could be extracted from this PDF.")
+            st.stop()
 
-            # 3) Cleaning
-            with st.spinner("Cleaning data..."):
-                df_clean = clean_data(df_raw)
+        st.success("Raw extraction complete!")
 
-            st.success("Cleaning complete!")
+        # 3) Cleaning
+        with st.spinner("Cleaning data..."):
+            df_clean = clean_data(df_raw)
 
-            # 4) Show tables
-            st.subheader("📊 Raw data")
-            st.dataframe(df_raw, use_container_width=True)
+        st.success("Cleaning complete!")
 
-            st.subheader("🧹 Clean data")
-            st.dataframe(df_clean, use_container_width=True)
+        # 4) Show tables
+        st.subheader("📊 Raw data")
+        st.dataframe(df_raw, use_container_width=True)
 
-            # 5) Download buttons (Excel)
-            def to_excel_bytes(df: pd.DataFrame) -> bytes:
-                out = io.BytesIO()
-                with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
-                    df.to_excel(writer, index=False, sheet_name="Sheet1")
-                return out.getvalue()
+        st.subheader("🧹 Clean data")
+        st.dataframe(df_clean, use_container_width=True)
 
-            raw_xlsx = to_excel_bytes(df_raw)
-            clean_xlsx = to_excel_bytes(df_clean)
+        # 5) Download as Excel
+        raw_xlsx = df_to_excel_bytes(df_raw)
+        clean_xlsx = df_to_excel_bytes(df_clean)
 
-            st.download_button(
-                label="⬇️ Download RAW data (Excel)",
-                data=raw_xlsx,
-                file_name="rawData.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+        st.download_button(
+            label="⬇️ Download RAW data (Excel)",
+            data=raw_xlsx,
+            file_name="rawData.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
-            st.download_button(
-                label="⬇️ Download CLEAN data (Excel)",
-                data=clean_xlsx,
-                file_name="cleanData.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+        st.download_button(
+            label="⬇️ Download CLEAN data (Excel)",
+            data=clean_xlsx,
+            file_name="cleanData.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
-# Simple style tweak (silver background like before)
+# --------- Simple style tweak ----------
 st.markdown(
     """
     <style>

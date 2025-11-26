@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 
@@ -8,9 +7,9 @@ from PIL import Image
 import easyocr
 from ultralytics import YOLO
 
+
 # --------------------------------------------------
 # Labels detected by YOLO and returned in the Excel
-# (must match your training YAML / class names)
 # --------------------------------------------------
 LABELS: List[str] = [
     "Anläggningstyp",
@@ -65,13 +64,6 @@ def normalize_text(text: str) -> str:
     return text
 
 
-def safe_name(s: str) -> str:
-    """Make a string safe for filenames."""
-    import re
-
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", s)
-
-
 def ocr_lines_from_crop(crop: Image.Image, max_lines: int = 3) -> List[str]:
     """
     Run EasyOCR on the crop and return up to max_lines lines.
@@ -97,8 +89,7 @@ def ocr_lines_from_crop(crop: Image.Image, max_lines: int = 3) -> List[str]:
 def clean_andr_field(tokens: List[str]) -> str:
     """
     Clean the 'Ändring' field based on OCR tokens.
-    This is a simplified version of your more advanced logic, but
-    follows the same idea: normalise symbols and A2 / A.2 etc.
+    A simplified but robust version capturing your typical formats.
     """
     import re
 
@@ -106,7 +97,7 @@ def clean_andr_field(tokens: List[str]) -> str:
     raw = raw.strip()
     raw_up = raw.upper()
 
-    # Field is just 'ÄNDR.' etc -> treat as "-"
+    # Field is just 'ÄNDR.' etc -> treat as '-'
     if raw_up.replace(" ", "") in ("ÄNDR.", "ÄNDR"):
         return "-"
 
@@ -179,6 +170,7 @@ def process_single_image(
         # Crop region
         crop = pil_img.crop((x1, y1, x2, y2))
 
+        # Special handling for Ändring
         if label_name == "Ändring":
             tokens = reader.readtext(np.array(crop), detail=0)
             cleaned = clean_andr_field(tokens)
@@ -199,7 +191,7 @@ def process_single_image(
 
 
 # --------------------------------------------------
-# 1) Folder-based extraction (for local scripts)
+# 1) Folder-based extraction (for local scripts, optional)
 # --------------------------------------------------
 def run_extraction(
     image_dir: str | Path,
@@ -231,7 +223,7 @@ def run_extraction(
 
 
 # --------------------------------------------------
-# 2) Page-based extraction (used by Streamlit: PDF -> images)
+# 2) Page-based extraction (used by Streamlit)
 # --------------------------------------------------
 def extract_from_pages(
     pages: List[Tuple[Image.Image | np.ndarray, str]],
@@ -241,7 +233,7 @@ def extract_from_pages(
     For Streamlit:
     pages: list of (img, filename) tuples
            img can be a NumPy array OR a PIL.Image.Image
-    model_path: path to YOLO weights (e.g. models/best.pt)
+    model_path: path to YOLO weights (e.g. weights/best.pt)
 
     Returns: DataFrame with columns ["Image"] + LABELS.
     """
@@ -268,9 +260,9 @@ def extract_from_pages(
 # CLI example (optional)
 # --------------------------------------------------
 if __name__ == "__main__":
-    # Simple example: run on all images in ./cropsImages_flat with ./models/best.pt
+    # Example: run on all images in ./cropsImages_flat with ./weights/best.pt
     default_image_dir = Path("cropsImages_flat")
-    default_model = Path("models") / "best.pt"
+    default_model = Path("weights") / "best.pt"
     default_excel_out = Path("rawData.xlsx")
 
     if not default_model.exists():
