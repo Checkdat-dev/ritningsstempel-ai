@@ -1,4 +1,3 @@
-requests
 streamlit
 pandas
 numpy
@@ -10,3 +9,4 @@ torch
 torchvision
 opencv-python-headless
 xlsxwriter
+requests
